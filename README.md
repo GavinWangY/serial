@@ -1,0 +1,2 @@
+# serial
+base on QtSerialPort
