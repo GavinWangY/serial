@@ -8,23 +8,45 @@ MainWindow::MainWindow(QWidget *parent) :
     ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
-
     foreach(const QSerialPortInfo &info, QSerialPortInfo::availablePorts())
     {
-        QSerialPort serial;
-        serial.setPort(info);
-        if(serial.open(QIODevice::ReadWrite))
+        QSerialPort serial_test;
+        serial_test.setPort(info);
+        if(serial_test.open(QIODevice::ReadWrite))
         {
-            ui->comboBox_port->addItem(serial.portName());
-            serial.close();
+            ui->comboBox_port->addItem(serial_test.portName());
+            serial_portName.append(serial_test.portName());
+            serial_test.close();
         }
     }
+
+    qDebug() << "auto scan port.";
+    timer_autoScanPort = new QTimer(this);
+    connect(timer_autoScanPort, SIGNAL(timeout()), this, SLOT(autoScanPort()));
+    timer_autoScanPort->start(1000);
+
     /*//设置波特率下拉菜单默认显示第三项
     ui->BaudBox->setCurrentIndex(3);
     //关闭发送按钮的使能
     ui->sendButton->setEnabled(false);
     qDebug() << tr("界面设定成功！");
     */
+
+    timer_autoSend = new QTimer(this);
+
+    label_statusBar_S = new QLabel;
+    label_statusBar_S->setMinimumSize(80, 20); // 设置标签最小大小
+    label_statusBar_S->setFrameShape(QFrame::WinPanel); // 设置标签形状
+    label_statusBar_S->setFrameShadow(QFrame::Sunken); // 设置标签阴影
+    ui->statusBar->addWidget(label_statusBar_S);
+    label_statusBar_S->setText(tr("S:0"));
+
+    label_statusBar_R = new QLabel;
+    label_statusBar_R->setMinimumSize(80, 20); // 设置标签最小大小
+    label_statusBar_R->setFrameShape(QFrame::WinPanel); // 设置标签形状
+    label_statusBar_R->setFrameShadow(QFrame::Sunken); // 设置标签阴影
+    ui->statusBar->addWidget(label_statusBar_R);
+    label_statusBar_R->setText(tr("R:0"));
 }
 
 MainWindow::~MainWindow()
@@ -37,6 +59,8 @@ void MainWindow::Read_Data()
 {
     QByteArray buf;
     buf = serial->readAll();
+    receive_num += buf.count();
+    label_statusBar_R->setText("R:" + QString::number(receive_num));
     if(!buf.isEmpty())
     {
         if(flag_showInHex == true){
@@ -65,7 +89,11 @@ void MainWindow::Read_Data()
 
 void MainWindow::on_pushButton_openPort_clicked()
 {
-
+    qDebug() << "on_pushButton_openPort_clicked enter" ;
+    if(ui->comboBox_port->currentText() == NULL){
+        qDebug() << "Error: no valid port.";
+        return;
+    }
     if(ui->pushButton_openPort->text()==tr("Open Port"))
     {
         bool ret;
@@ -74,11 +102,15 @@ void MainWindow::on_pushButton_openPort_clicked()
         serial->setPortName(ui->comboBox_port->currentText());
         qDebug() << ui->comboBox_port->currentText();
         //打开串口
-        ret = serial->open(QIODevice::ReadWrite);
-        qDebug() << "open: " << ret;
+        if(false == serial->open(QIODevice::ReadWrite)){
+            qDebug() << "Error: open failed.";
+            return;
+        }
         //设置波特率
-        serial->setBaudRate(ui->comboBox_baudRate->currentText().toInt());
-        qDebug() << "setBaudRate: " << ret;
+        if(false == serial->setBaudRate(ui->comboBox_baudRate->currentText().toInt())){
+            qDebug() << "Error: setBaudRate failed.";
+            return;
+        }
         //设置数据位数
         switch(ui->comboBox_byteSize->currentIndex())
         {
@@ -129,6 +161,7 @@ void MainWindow::on_pushButton_openPort_clicked()
         ui->pushButton_openPort->setText(tr("Open Port"));
         ui->comboBox_flowControl->setEnabled(true);
         ui->pushButton_sendData->setEnabled(false);
+        timer_autoSend->stop();
     }
 }
 
@@ -142,6 +175,7 @@ void MainWindow::on_pushButton_sendData_clicked()
         if (dataStr.length() % 2){
             dataStr.insert(dataStr.length()-1, '0');
         }
+        send_num += dataStr.length()/2;
         QByteArray sendData;
         StringToHex(dataStr, sendData);
         serial->write(sendData);
@@ -149,6 +183,7 @@ void MainWindow::on_pushButton_sendData_clicked()
             qDebug() << sendData.at(i);
         }
     }else{
+        send_num += ui->textEdit_send->toPlainText().toLatin1().length();
         if(flag_sendWithEnter == true){
             QString str;
             str = ui->textEdit_send->toPlainText().toLatin1();
@@ -160,6 +195,7 @@ void MainWindow::on_pushButton_sendData_clicked()
             qDebug() << ui->textEdit_send->toPlainText().toLatin1();
         }
     }
+    label_statusBar_S->setText("S:" + QString::number(send_num));
     //RxLCD->display(RxLCD->value() + sendData.size());
 }
 
@@ -206,9 +242,55 @@ void MainWindow::on_checkBox_showInHex_stateChanged(int arg1)
 void MainWindow::on_pushButton_clearInformation_clicked()
 {
     ui->textBrowser_receive->clear();
+    send_num = 0;
+    receive_num = 0;
+    label_statusBar_S->setText("S:" + QString::number(send_num));
+    label_statusBar_R->setText("R:" + QString::number(receive_num));
 }
 
 void MainWindow::on_checkBox_sendWithEnter_stateChanged(int arg1)
 {
     flag_sendWithEnter = ui->checkBox_sendWithEnter->isChecked();
+}
+
+void MainWindow::on_checkBox_autoSend_stateChanged(int arg1)
+{
+    qDebug() << "on_checkBox_autoSend_stateChanged enter.";
+    flag_autoSend = ui->checkBox_autoSend->isChecked();
+    qDebug() << flag_autoSend;
+
+    if(flag_autoSend == true){
+        connect(timer_autoSend, SIGNAL(timeout()), this, SLOT(autoSend()));
+        qDebug() << ui->lineEdit_timeTrans->text().toInt();
+        timer_autoSend->start(ui->lineEdit_timeTrans->text().toInt());
+    }else{
+        qDebug() << "timer_autoSend->stop";
+        timer_autoSend->stop();
+    }
+}
+
+void MainWindow::autoSend()
+{
+    qDebug() << "autoSend enter." ;
+    on_pushButton_sendData_clicked();
+}
+
+void MainWindow::autoScanPort()
+{
+    qDebug() << "autoScanPort enter.";
+    ui->comboBox_port->clear();
+
+    if(serial_portName.isEmpty() == false){
+        ui->comboBox_port->addItem(serial_portName);
+    }
+    foreach(const QSerialPortInfo &info, QSerialPortInfo::availablePorts())
+    {
+        QSerialPort serial_test;
+        serial_test.setPort(info);
+        if(serial_test.open(QIODevice::ReadWrite))
+        {
+            ui->comboBox_port->addItem(serial_test.portName());
+            serial_test.close();
+        }
+    }
 }
